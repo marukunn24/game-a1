@@ -2,199 +2,237 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
 let frame = 0;
-let state = "stage"; // stage, boss, clear
+let state = "stage"; // stage / boss / clear
 
-// ===== 入力 =====
+// =====================
+// 入力
+// =====================
 const keys = {};
-document.addEventListener("keydown", e => keys[e.key] = true);
-document.addEventListener("keyup", e => keys[e.key] = false);
+document.addEventListener("keydown", e => {
+  keys[e.key] = true;
+  e.preventDefault();
+});
+document.addEventListener("keyup", e => {
+  keys[e.key] = false;
+});
 
-// ===== プレイヤー =====
+// =====================
+// 自機
+// =====================
 const player = {
   x: 200,
-  y: 420,
+  y: 400,
   r: 3,
   speed: 4,
   slowSpeed: 2,
   bombs: 3,
   bombMax: 3,
-  bombCharge: 0,
-  alive: true
+  bombRecoverTimer: 0
 };
 
-let playerShots = [];
-let enemyShots = [];
+const playerShots = [];
 
-// ===== 敵 =====
-let enemies = [];
+// =====================
+// 敵・弾
+// =====================
+const enemies = [];
+const enemyShots = [];
 
-// ===== ボス =====
+// =====================
+// 道中 Scene
+// =====================
+const stageScenes = [
+  { duration: 1800, spawn: 90, type: 0 },
+  { duration: 1800, spawn: 60, type: 1 },
+  { duration: 1200, spawn: 45, type: 2 },
+  { duration: 1200, spawn: 30, type: 3 }
+];
+
+const enemyTypes = [
+  { hp: 10, speed: 1, shot: 120 },
+  { hp: 20, speed: 1.5, shot: 90 },
+  { hp: 40, speed: 0.8, shot: 60 },
+  { hp: 60, speed: 0.6, shot: 45 }
+];
+
+let currentScene = 0;
+let sceneTimer = 0;
+
+// =====================
+// ボス
+// =====================
 const boss = {
   x: 200,
   y: 100,
+  r: 20,
   hp: 3000,
-  phase: 0,
-  timer: 0
+  phaseIndex: 0,
+  phaseTimer: 0,
+  phases: [
+    { type: "normal", time: 600 },
+    { type: "spell", time: 900 },
+    { type: "normal", time: 600 },
+    { type: "spell", time: 900 },
+    { type: "normal", time: 600 },
+    { type: "spell", time: 1200, rage: true }
+  ]
 };
 
-// ===== ユーティリティ =====
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-// ===== ショット =====
+// =====================
+// 処理系
+// =====================
 function shoot() {
-  if (frame % 5 !== 0) return;
+  if (!keys["x"] || frame % 5 !== 0) return;
 
   if (keys["z"]) {
-    // 低速：集中ショット
-    playerShots.push({ x: player.x, y: player.y, vx: 0, vy: -6 });
+    playerShots.push({ x: player.x, y: player.y, vx: 0, vy: -8 });
   } else {
-    // 通常：拡散
-    [-1, 1].forEach(d => {
-      playerShots.push({ x: player.x, y: player.y, vx: d, vy: -6 });
+    [-2, 2].forEach(vx => {
+      playerShots.push({ x: player.x, y: player.y, vx, vy: -8 });
     });
   }
 }
 
-// ===== ボム =====
 function useBomb() {
-  if (player.bombs <= 0) return;
+  if (!keys["c"] || player.bombs <= 0) return;
   player.bombs--;
-  enemyShots = [];
+  enemyShots.length = 0;
 }
 
-// ===== 敵生成 =====
-function spawnEnemy(type) {
+function spawnEnemy() {
+  const scene = stageScenes[currentScene];
+  const t = enemyTypes[scene.type];
+
   enemies.push({
     x: Math.random() * 360 + 20,
     y: -20,
-    hp: type === 0 ? 10 : 30,
-    type,
+    hp: t.hp,
+    speed: t.speed,
+    shot: t.shot,
     timer: 0
   });
 }
 
-// ===== 更新 =====
+function bossAttack() {
+  const p = boss.phases[boss.phaseIndex];
+  boss.phaseTimer++;
+
+  if (p.type === "normal" && boss.phaseTimer % 60 === 0) {
+    for (let i = 0; i < 12; i++) {
+      const a = Math.PI * 2 / 12 * i;
+      enemyShots.push({
+        x: boss.x,
+        y: boss.y,
+        vx: Math.cos(a) * 2,
+        vy: Math.sin(a) * 2
+      });
+    }
+  }
+
+  if (p.type === "spell" && boss.phaseTimer % 20 === 0) {
+    const speed = p.rage ? 4 : 3;
+    for (let i = 0; i < 36; i++) {
+      const a = Math.PI * 2 / 36 * i;
+      enemyShots.push({
+        x: boss.x,
+        y: boss.y,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed
+      });
+    }
+  }
+
+  if (boss.phaseTimer > p.time) {
+    boss.phaseIndex++;
+    boss.phaseTimer = 0;
+    enemyShots.length = 0;
+
+    if (boss.phaseIndex >= boss.phases.length) {
+      state = "clear";
+    }
+  }
+}
+
+// =====================
+// 更新
+// =====================
 function update() {
   frame++;
 
-  // プレイヤー移動
+  // 自機移動
   let sp = keys["z"] ? player.slowSpeed : player.speed;
   if (keys["ArrowLeft"]) player.x -= sp;
   if (keys["ArrowRight"]) player.x += sp;
   if (keys["ArrowUp"]) player.y -= sp;
   if (keys["ArrowDown"]) player.y += sp;
 
-  player.x = Math.max(0, Math.min(400, player.x));
-  player.y = Math.max(0, Math.min(480, player.y));
+  shoot();
+  useBomb();
 
-  // ショット
-  if (keys["x"]) shoot();
-
-  // ボム
-  if (keys["c"] && frame % 20 === 0) useBomb();
-
-  // ボム回復（20秒で1）
-  if (frame % (60 * 20) === 0 && player.bombs < player.bombMax) {
+  // ボム回復
+  player.bombRecoverTimer++;
+  if (player.bombRecoverTimer > 1800 && player.bombs < player.bombMax) {
     player.bombs++;
+    player.bombRecoverTimer = 0;
   }
 
-  // ===== 道中 =====
+  // 道中
   if (state === "stage") {
-    if (frame % 120 === 0) spawnEnemy(frame % 240 === 0 ? 1 : 0);
-    if (frame > 60 * 120) {
-      state = "boss";
-      enemies = [];
-      enemyShots = [];
-      frame = 0;
+    sceneTimer++;
+    if (sceneTimer % stageScenes[currentScene].spawn === 0) {
+      spawnEnemy();
     }
-  }
-
-  // ===== ボス =====
-  if (state === "boss") {
-    boss.timer++;
-
-    if (boss.phase < 5 && boss.timer > 600) {
-      boss.phase++;
-      boss.timer = 0;
-    }
-
-    // 発狂
-    if (boss.phase === 5 && boss.timer % 10 === 0) {
-      for (let i = 0; i < 36; i++) {
-        const a = i * Math.PI / 18;
-        enemyShots.push({
-          x: boss.x,
-          y: boss.y,
-          vx: Math.cos(a) * 3,
-          vy: Math.sin(a) * 3,
-          r: 5
-        });
+    if (sceneTimer > stageScenes[currentScene].duration) {
+      sceneTimer = 0;
+      currentScene++;
+      if (currentScene >= stageScenes.length) {
+        state = "boss";
+        enemies.length = 0;
+        enemyShots.length = 0;
       }
     }
   }
 
-  // ===== 敵更新 =====
-  enemies.forEach(e => {
-    e.y += 1;
-    e.timer++;
+  if (state === "boss") bossAttack();
 
-    if (e.timer % 60 === 0) {
+  // 敵更新
+  enemies.forEach(e => {
+    e.y += e.speed;
+    e.timer++;
+    if (e.timer % e.shot === 0) {
       enemyShots.push({
         x: e.x,
         y: e.y,
         vx: 0,
-        vy: 3,
-        r: 6
+        vy: 3
       });
     }
   });
 
-  // ===== 弾更新 =====
+  // 弾移動
   [...playerShots, ...enemyShots].forEach(b => {
     b.x += b.vx;
     b.y += b.vy;
   });
-
-  // ===== 当たり判定 =====
-  enemies.forEach(e => {
-    playerShots.forEach(s => {
-      if (dist(e, s) < 10) e.hp--;
-    });
-  });
-
-  enemies = enemies.filter(e => e.hp > 0);
-
-  enemyShots.forEach(b => {
-    if (dist(player, b) < player.r + b.r) player.alive = false;
-  });
 }
 
-// ===== 描画 =====
+// =====================
+// 描画
+// =====================
 function draw() {
   ctx.clearRect(0, 0, 400, 480);
 
-  // プレイヤー
+  // 自機
   ctx.fillStyle = "white";
   ctx.beginPath();
   ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
   ctx.fill();
 
-  // 弾
-  ctx.fillStyle = "cyan";
-  playerShots.forEach(b => ctx.fillRect(b.x - 2, b.y - 6, 4, 8));
-
-  ctx.fillStyle = "red";
-  enemyShots.forEach(b => {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
   // 敵
-  ctx.fillStyle = "orange";
+  ctx.fillStyle = "red";
   enemies.forEach(e => {
     ctx.beginPath();
-    ctx.arc(e.x, e.y, 10, 0, Math.PI * 2);
+    ctx.arc(e.x, e.y, 8, 0, Math.PI * 2);
     ctx.fill();
   });
 
@@ -202,23 +240,25 @@ function draw() {
   if (state === "boss") {
     ctx.fillStyle = "purple";
     ctx.beginPath();
-    ctx.arc(boss.x, boss.y, 20, 0, Math.PI * 2);
+    ctx.arc(boss.x, boss.y, boss.r, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  ctx.fillStyle = "white";
-  ctx.fillText(`Bomb: ${player.bombs}`, 10, 20);
+  // 弾
+  ctx.fillStyle = "cyan";
+  playerShots.forEach(b => ctx.fillRect(b.x - 2, b.y - 6, 4, 8));
+
+  ctx.fillStyle = "yellow";
+  enemyShots.forEach(b => ctx.fillRect(b.x - 2, b.y - 2, 4, 4));
 }
 
-// ===== ループ =====
+// =====================
+// ループ
+// =====================
 function loop() {
-  if (player.alive) {
-    update();
-    draw();
-    requestAnimationFrame(loop);
-  } else {
-    ctx.fillText("GAME OVER", 160, 240);
-  }
+  update();
+  draw();
+  requestAnimationFrame(loop);
 }
 
 loop();
